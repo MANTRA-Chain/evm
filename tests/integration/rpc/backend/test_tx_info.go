@@ -120,7 +120,7 @@ func (s *TestSuite) TestGetTransactionByHash() {
 			err := s.backend.Indexer.IndexBlock(block, responseDeliver)
 			s.Require().NoError(err)
 
-			rpcTx, err := s.backend.GetTransactionByHash(common.HexToHash(tc.tx.Hash))
+			rpcTx, err := s.backend.GetTransactionByHash(tc.tx.Hash())
 
 			if tc.expPass {
 				s.Require().NoError(err)
@@ -180,7 +180,7 @@ func (s *TestSuite) TestGetTransactionsByHashPending() {
 			s.SetupTest() // reset
 			tc.registerMock()
 
-			rpcTx, err := s.backend.GetTransactionByHashPending(common.HexToHash(tc.tx.Hash))
+			rpcTx, err := s.backend.GetTransactionByHashPending(tc.tx.Hash())
 
 			if tc.expPass {
 				s.Require().NoError(err)
@@ -208,7 +208,7 @@ func (s *TestSuite) TestGetTxByEthHash() {
 			func() {
 				s.backend.Indexer = nil
 				client := s.backend.ClientCtx.Client.(*mocks.Client)
-				query := fmt.Sprintf("%s.%s='%s'", evmtypes.TypeMsgEthereumTx, evmtypes.AttributeKeyEthereumTxHash, common.HexToHash(msgEthereumTx.Hash).Hex())
+				query := fmt.Sprintf("%s.%s='%s'", evmtypes.TypeMsgEthereumTx, evmtypes.AttributeKeyEthereumTxHash, msgEthereumTx.Hash().Hex())
 				RegisterTxSearch(client, query, bz)
 			},
 			msgEthereumTx,
@@ -222,7 +222,7 @@ func (s *TestSuite) TestGetTxByEthHash() {
 			s.SetupTest() // reset
 			tc.registerMock()
 
-			rpcTx, err := s.backend.GetTxByEthHash(common.HexToHash(tc.tx.Hash))
+			rpcTx, err := s.backend.GetTxByEthHash(tc.tx.Hash())
 
 			if tc.expPass {
 				s.Require().NoError(err)
@@ -294,7 +294,7 @@ func (s *TestSuite) TestGetTransactionByBlockAndIndex() {
 			Code: 0,
 			Events: []abci.Event{
 				{Type: evmtypes.EventTypeEthereumTx, Attributes: []abci.EventAttribute{
-					{Key: "ethereumTxHash", Value: common.HexToHash(msgEthTx.Hash).Hex()},
+					{Key: "ethereumTxHash", Value: msgEthTx.Hash().Hex()},
 					{Key: "txIndex", Value: "0"},
 					{Key: "amount", Value: "1000"},
 					{Key: "txGasUsed", Value: "21000"},
@@ -564,10 +564,11 @@ func (s *TestSuite) TestGetTransactionReceipt() {
 		blockResult  []*abci.ExecTxResult
 		expPass      bool
 		expErr       error
+		expEmpty     bool
 	}{
 		// TODO test happy path
 		{
-			name:         "fail - tx not found",
+			name:         "success - tx not found",
 			registerMock: func() {},
 			block:        &types.Block{Header: types.Header{Height: 1}, Data: types.Data{Txs: []types.Tx{txBz}}},
 			tx:           msgEthereumTx2,
@@ -586,8 +587,8 @@ func (s *TestSuite) TestGetTransactionReceipt() {
 					},
 				},
 			},
-			expPass: false,
-			expErr:  fmt.Errorf("tx not found, hash: %s", txHash.Hex()),
+			expPass:  true,
+			expEmpty: true,
 		},
 		{
 			name: "fail - block not found",
@@ -645,8 +646,8 @@ func (s *TestSuite) TestGetTransactionReceipt() {
 			expErr:  fmt.Errorf("block result not found at height 1: some error"),
 		},
 		{
-			"happy path",
-			func() {
+			name: "happy path",
+			registerMock: func() {
 				var header metadata.MD
 				QueryClient := s.backend.QueryClient.QueryClient.(*mocks.EVMQueryClient)
 				client := s.backend.ClientCtx.Client.(*mocks.Client)
@@ -656,9 +657,9 @@ func (s *TestSuite) TestGetTransactionReceipt() {
 				_, err = RegisterBlockResults(client, 1)
 				s.Require().NoError(err)
 			},
-			msgEthereumTx,
-			&types.Block{Header: types.Header{Height: 1}, Data: types.Data{Txs: []types.Tx{txBz}}},
-			[]*abci.ExecTxResult{
+			tx:    msgEthereumTx,
+			block: &types.Block{Header: types.Header{Height: 1}, Data: types.Data{Txs: []types.Tx{txBz}}},
+			blockResult: []*abci.ExecTxResult{
 				{
 					Code: 0,
 					Events: []abci.Event{
@@ -673,8 +674,7 @@ func (s *TestSuite) TestGetTransactionReceipt() {
 					},
 				},
 			},
-			true,
-			nil,
+			expPass: true,
 		},
 	}
 
@@ -688,9 +688,12 @@ func (s *TestSuite) TestGetTransactionReceipt() {
 			err := s.backend.Indexer.IndexBlock(tc.block, tc.blockResult)
 			s.Require().NoError(err)
 
-			hash := common.HexToHash(tc.tx.Hash)
+			hash := tc.tx.Hash()
 			res, err := s.backend.GetTransactionReceipt(hash)
-			if tc.expPass {
+			switch {
+			case tc.expEmpty:
+				s.Require().Empty(res)
+			case tc.expPass:
 				s.Require().Equal(res["transactionHash"], hash)
 				s.Require().Equal(res["blockNumber"], hexutil.Uint64(tc.block.Height)) //nolint: gosec // G115
 				requiredFields := []string{"status", "cumulativeGasUsed", "logsBloom", "logs", "gasUsed", "blockHash", "blockNumber", "transactionIndex", "effectiveGasPrice", "from", "to", "type"}
@@ -699,7 +702,7 @@ func (s *TestSuite) TestGetTransactionReceipt() {
 				}
 				s.Require().Nil(res["contractAddress"]) // no contract creation
 				s.Require().NoError(err)
-			} else {
+			default:
 				s.Require().Error(err)
 				s.Require().ErrorContains(err, tc.expErr.Error())
 			}
