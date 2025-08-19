@@ -1,6 +1,7 @@
 package keeper
 
 import (
+	"encoding/binary"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -9,6 +10,7 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
+	ethparams "github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 
 	"github.com/cosmos/evm/utils"
@@ -385,4 +387,36 @@ func (k Keeper) AddTransientGasUsed(ctx sdk.Context, gasUsed uint64) (uint64, er
 // KVStoreKeys returns KVStore keys injected to keeper
 func (k Keeper) KVStoreKeys() map[string]*storetypes.KVStoreKey {
 	return k.storeKeys
+}
+
+// SetHeaderHash sets current block hash into EIP-2935 compatible storage contract.
+func (k Keeper) SetHeaderHash(ctx sdk.Context) {
+	window := uint64(types.DefaultHistoryServeWindow)
+	params := k.GetParams(ctx)
+	if params.HistoryServeWindow > 0 {
+		window = params.HistoryServeWindow
+	}
+
+	acct := k.GetAccount(ctx, ethparams.HistoryStorageAddress)
+	if acct != nil && acct.IsContract() {
+		// set current block hash in the contract storage, compatible with EIP-2935
+		ringIndex := uint64(ctx.BlockHeight()) % window //nolint:gosec // G115 // won't exceed uint64
+		var key common.Hash
+		binary.BigEndian.PutUint64(key[24:], ringIndex)
+		k.SetState(ctx, ethparams.HistoryStorageAddress, key, ctx.HeaderHash())
+	}
+}
+
+// GetHeaderHash sets block hash into EIP-2935 compatible storage contract.
+func (k Keeper) GetHeaderHash(ctx sdk.Context, height uint64) common.Hash {
+	window := uint64(types.DefaultHistoryServeWindow)
+	params := k.GetParams(ctx)
+	if params.HistoryServeWindow > 0 {
+		window = params.HistoryServeWindow
+	}
+
+	ringIndex := height % window
+	var key common.Hash
+	binary.BigEndian.PutUint64(key[24:], ringIndex)
+	return k.GetState(ctx, ethparams.HistoryStorageAddress, key)
 }
