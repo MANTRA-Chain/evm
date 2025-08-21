@@ -3,7 +3,6 @@ package statedb
 import (
 	"errors"
 	"fmt"
-	"math/big"
 	"slices"
 	"sort"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/utils"
 	"github.com/holiman/uint256"
 
@@ -92,20 +92,25 @@ func (s *StateDB) CreateContract(address common.Address) {
 }
 
 // GetStorageRoot calculates the hash of the trie root by iterating through all storage objects for a given account
-// this method don't calculate the actual storage root, only checks if the storage is empty or not.
 func (s *StateDB) GetStorageRoot(addr common.Address) common.Hash {
+	sr := trie.NewStackTrie(nil)
+	s.keeper.ForEachStorage(s.ctx, addr, func(key, value common.Hash) bool {
+		if err := sr.Update(key.Bytes(), value.Bytes()); err != nil {
+			s.ctx.Logger().Error("failed adding state during storage root hash", "err", err.Error())
+			return false
+		}
+		return true
+	})
+	return sr.Hash()
+}
+
+func (s *StateDB) IsStorageEmpty(addr common.Address) bool {
 	empty := true
 	s.keeper.ForEachStorage(s.ctx, addr, func(key, value common.Hash) bool {
 		empty = false
-		// break early
 		return false
 	})
-	if empty {
-		return ethtypes.EmptyRootHash
-	}
-
-	// returns a dummy hash to indicate non-empty storage
-	return common.BigToHash(big.NewInt(1))
+	return empty
 }
 
 /*
