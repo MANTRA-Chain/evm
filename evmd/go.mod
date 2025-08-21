@@ -280,7 +280,7 @@ replace (
 	github.com/cosmos/evm => ../
 	github.com/cosmos/evm/evmd => ./evmd
 	// use Cosmos geth fork
-	github.com/ethereum/go-ethereum => github.com/yihuang/go-ethereum v1.10.21-0.20250820050041-210d5222d7fd
+	github.com/ethereum/go-ethereum => github.com/cosmos/go-ethereum v1.16.2-cosmos-1
 	// Security Advisory https://github.com/advisories/GHSA-h395-qcrw-5vmq
 	github.com/gin-gonic/gin => github.com/gin-gonic/gin v1.9.1
 	// replace broken goleveldb
