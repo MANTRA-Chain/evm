@@ -66,6 +66,18 @@ const (
 	// DefaultEVMChainID is the default EVM Chain ID if one is not provided
 	DefaultEVMChainID = 262144
 
+	// DefaultTxSlotSize is used to calculate how many data slots a single transaction
+	// takes up based on its size. The slots are used as DoS protection, ensuring
+	// that validating a new transaction remains a constant operation (in reality
+	// O(maxslots), where max slots are 4 currently).
+	DefaultTxSlotSize uint64 = 32 * 1024
+
+	// DefaultMaxSize is the maximum size a single transaction can have. This field has
+	// non-trivial consequences: larger transactions are significantly harder and
+	// more expensive to propagate; larger transactions also take more resources
+	// to validate whether they fit into the pool or not.
+	DefaultMaxSize uint64 = 4 * DefaultTxSlotSize // 128KB
+
 	// DefaultGasCap is the default cap on gas that can be used in eth_call/estimateGas
 	DefaultGasCap uint64 = 25_000_000
 
@@ -139,6 +151,8 @@ type EVMConfig struct {
 	Tracer string `mapstructure:"tracer"`
 	// MaxTxGasWanted defines the gas wanted for each eth tx returned in ante handler in check tx mode.
 	MaxTxGasWanted uint64 `mapstructure:"max-tx-gas-wanted"`
+	// MaxSize defines the maximum size of a single transaction that can be processed.
+	MaxSize uint64 `mapstructure:"max-size"`
 	// Enables tracking of SHA3 preimages in the VM
 	EnablePreimageRecording bool `mapstructure:"cache-preimage"`
 	// EVMChainID defines the EIP-155 replay-protection chain ID.
@@ -210,6 +224,7 @@ func DefaultEVMConfig() *EVMConfig {
 	return &EVMConfig{
 		Tracer:                  DefaultEVMTracer,
 		MaxTxGasWanted:          DefaultMaxTxGasWanted,
+		MaxSize:                 DefaultMaxSize,
 		EVMChainID:              DefaultEVMChainID,
 		EnablePreimageRecording: DefaultEnablePreimageRecording,
 	}

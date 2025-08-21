@@ -68,6 +68,7 @@ const (
 const (
 	EVMTracer                  = "evm.tracer"
 	EVMMaxTxGasWanted          = "evm.max-tx-gas-wanted"
+	EVMMaxSize                 = "evm.max-size"
 	EVMEnablePreimageRecording = "evm.cache-preimage"
 	EVMChainID                 = "evm.evm-chain-id"
 )

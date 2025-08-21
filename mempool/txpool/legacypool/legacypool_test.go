@@ -42,6 +42,7 @@ import (
 	"github.com/holiman/uint256"
 
 	"github.com/cosmos/evm/mempool/txpool"
+	cosmosevmserverconfig "github.com/cosmos/evm/server/config"
 )
 
 var (
@@ -1237,7 +1238,8 @@ func TestAllowedTxSize(t *testing.T) {
 
 	// Find the maximum data length for the kind of transaction which will
 	// be generated in the pool.addRemoteSync calls below.
-	const largeDataLength = txMaxSize - 200 // enough to have a 5 bytes RLP encoding of the data length number
+	txMaxSize := cosmosevmserverconfig.DefaultMaxSize
+	var largeDataLength = txMaxSize - 200 // enough to have a 5 bytes RLP encoding of the data length number
 	txWithLargeData := pricedDataTransaction(0, pool.currentHead.Load().GasLimit, big.NewInt(1), key, largeDataLength)
 	maxTxLengthWithoutData := txWithLargeData.Size() - largeDataLength // 103 bytes
 	maxTxDataLength := txMaxSize - maxTxLengthWithoutData              // 131072 - 103 = 130953 bytes
@@ -1256,7 +1258,7 @@ func TestAllowedTxSize(t *testing.T) {
 		t.Fatalf("expected rejection on slightly oversize transaction")
 	}
 	// Try adding a transaction above maximum size by more than one
-	if err := pool.addRemoteSync(pricedDataTransaction(2, pool.currentHead.Load().GasLimit, big.NewInt(1), key, maxTxDataLength+1+uint64(rand.Intn(10*txMaxSize)))); err == nil {
+	if err := pool.addRemoteSync(pricedDataTransaction(2, pool.currentHead.Load().GasLimit, big.NewInt(1), key, maxTxDataLength+1+uint64(rand.Intn(10*int(txMaxSize))))); err == nil {
 		t.Fatalf("expected rejection on oversize transaction")
 	}
 	// Run some sanity checks on the pool internals
@@ -2226,7 +2228,7 @@ func TestSlotCount(t *testing.T) {
 		t.Fatalf("small transactions slot count mismatch: have %d want %d", slots, 1)
 	}
 	// Check that a large transaction consumes the correct number of slots
-	bigTx := pricedDataTransaction(0, 0, big.NewInt(0), key, uint64(10*txSlotSize))
+	bigTx := pricedDataTransaction(0, 0, big.NewInt(0), key, uint64(10*cosmosevmserverconfig.DefaultMaxSize))
 	if slots := numSlots(bigTx); slots != 11 {
 		t.Fatalf("big transactions slot count mismatch: have %d want %d", slots, 11)
 	}

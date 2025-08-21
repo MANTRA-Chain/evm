@@ -774,6 +774,7 @@ func NewExampleApp(
 		mempoolConfig := &evmmempool.EVMMempoolConfig{
 			AnteHandler:   app.GetAnteHandler(),
 			BlockGasLimit: 100_000_000,
+			TxMaxSize:     cast.ToUint64(appOpts.Get(srvflags.EVMMaxSize)),
 		}
 
 		evmMempool := evmmempool.NewExperimentalEVMMempool(app.CreateQueryContext, logger, app.EVMKeeper, app.FeeMarketKeeper, app.txConfig, app.clientCtx, mempoolConfig)

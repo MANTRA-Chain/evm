@@ -16,6 +16,9 @@ tracer = "{{ .EVM.Tracer }}"
 # MaxTxGasWanted defines the gas wanted for each eth tx returned in ante handler in check tx mode.
 max-tx-gas-wanted = {{ .EVM.MaxTxGasWanted }}
 
+# MaxSize defines the maximum size of a single transaction that can be processed.
+max-size = {{ .EVM.MaxSize }}
+
 # EnablePreimageRecording enables tracking of SHA3 preimages in the VM
 cache-preimage = {{ .EVM.EnablePreimageRecording }}
 

@@ -12,6 +12,7 @@ import (
 	"github.com/cosmos/evm/mempool/miner"
 	"github.com/cosmos/evm/mempool/txpool"
 	"github.com/cosmos/evm/mempool/txpool/legacypool"
+	cosmosevmserverconfig "github.com/cosmos/evm/server/config"
 	"github.com/cosmos/evm/x/precisebank/types"
 	evmtypes "github.com/cosmos/evm/x/vm/types"
 
@@ -66,6 +67,7 @@ type EVMMempoolConfig struct {
 	AnteHandler   sdk.AnteHandler
 	BroadCastTxFn func(txs []*ethtypes.Transaction) error
 	BlockGasLimit uint64 // Block gas limit from consensus parameters
+	TxMaxSize     uint64 // Maximum size of a single transaction that can be processed
 }
 
 // NewExperimentalEVMMempool creates a new unified mempool for EVM and Cosmos transactions.
@@ -98,6 +100,10 @@ func NewExperimentalEVMMempool(getCtxCallback func(height int64, prove bool) (sd
 	if config.BlockGasLimit == 0 {
 		logger.Debug("block gas limit is 0, setting default", "default_limit", 100_000_000)
 		config.BlockGasLimit = 100_000_000
+	}
+	if config.TxMaxSize == 0 {
+		logger.Debug("tx max size is 0, setting default", "default_size", cosmosevmserverconfig.DefaultMaxSize)
+		config.TxMaxSize = cosmosevmserverconfig.DefaultMaxSize
 	}
 
 	// Default txPool

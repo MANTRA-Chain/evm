@@ -42,20 +42,7 @@ import (
 	"github.com/holiman/uint256"
 
 	"github.com/cosmos/evm/mempool/txpool"
-)
-
-const (
-	// txSlotSize is used to calculate how many data slots a single transaction
-	// takes up based on its size. The slots are used as DoS protection, ensuring
-	// that validating a new transaction remains a constant operation (in reality
-	// O(maxslots), where max slots are 4 currently).
-	txSlotSize = 32 * 1024
-
-	// txMaxSize is the maximum size a single transaction can have. This field has
-	// non-trivial consequences: larger transactions are significantly harder and
-	// more expensive to propagate; larger transactions also take more resources
-	// to validate whether they fit into the pool or not.
-	txMaxSize = 4 * txSlotSize // 128KB
+	cosmosevmserverconfig "github.com/cosmos/evm/server/config"
 )
 
 var (
@@ -150,7 +137,8 @@ type Config struct {
 	AccountQueue uint64 // Maximum number of non-executable transaction slots permitted per account
 	GlobalQueue  uint64 // Maximum number of non-executable transaction slots for all accounts
 
-	Lifetime time.Duration // Maximum amount of time non-executable transaction are queued
+	Lifetime  time.Duration // Maximum amount of time non-executable transaction are queued
+	TxMaxSize uint64        // Maximum size of a single transaction that can be processed
 }
 
 // DefaultConfig contains the default configurations for the transaction pool.
@@ -166,7 +154,8 @@ var DefaultConfig = Config{
 	AccountQueue: 64,
 	GlobalQueue:  1024,
 
-	Lifetime: 3 * time.Hour,
+	Lifetime:  3 * time.Hour,
+	TxMaxSize: cosmosevmserverconfig.DefaultMaxSize,
 }
 
 // sanitize checks the provided user configurations and changes anything that's
@@ -200,6 +189,10 @@ func (config *Config) sanitize() Config {
 	if conf.Lifetime < 1 {
 		log.Warn("Sanitizing invalid txpool lifetime", "provided", conf.Lifetime, "updated", DefaultConfig.Lifetime)
 		conf.Lifetime = DefaultConfig.Lifetime
+	}
+	if conf.TxMaxSize < 1 {
+		log.Warn("Sanitizing invalid txpool max size", "provided", conf.TxMaxSize, "updated", DefaultConfig.TxMaxSize)
+		conf.TxMaxSize = DefaultConfig.TxMaxSize
 	}
 	return conf
 }
@@ -573,7 +566,7 @@ func (pool *LegacyPool) ValidateTxBasics(tx *types.Transaction) error {
 			1<<types.AccessListTxType |
 			1<<types.DynamicFeeTxType |
 			1<<types.SetCodeTxType,
-		MaxSize: txMaxSize,
+		MaxSize: pool.config.TxMaxSize,
 		MinTip:  pool.gasTip.Load().ToBig(),
 	}
 	return txpool.ValidateTransaction(tx, pool.currentHead.Load(), pool.signer, opts)
@@ -1833,7 +1826,7 @@ func (t *lookup) hasAuth(addr common.Address) bool {
 
 // numSlots calculates the number of slots needed for a single transaction.
 func numSlots(tx *types.Transaction) int {
-	return int((tx.Size() + txSlotSize - 1) / txSlotSize)
+	return int((tx.Size() + cosmosevmserverconfig.DefaultTxSlotSize - 1) / cosmosevmserverconfig.DefaultTxSlotSize)
 }
 
 // Clear implements txpool.SubPool, removing all tracked txs from the pool
