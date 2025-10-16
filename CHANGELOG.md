@@ -23,11 +23,11 @@
 - [\#689](https://github.com/cosmos/evm/pull/689) Align debug addr for hex address.
 - [\#668](https://github.com/cosmos/evm/pull/668) Fix panic in legacy mempool when Reset() was called with a skipped header between old and new block.
 - [\#725](https://github.com/cosmos/evm/pull/725) Fix inconsistent block hash in json-rpc.
-- [\#]() Fix panic if evm mempool not used.
+- [\#730](https://github.com/cosmos/evm/pull/730) Fix panic if evm mempool not used.
 - [\#729](https://github.com/cosmos/evm/pull/729) Remove non-deterministic EVM pre-blocker.
 - [\#727](https://github.com/cosmos/evm/pull/727) Avoid nil pointer for `tx evm raw` due to uninitialized EVM coin info.
 - [\#723](https://github.com/cosmos/evm/pull/723) Fix TransactionIndex in receipt generation to use actual EthTxIndex instead of loop index.
-- [\#725](https://github.com/cosmos/evm/pull/725) Fix inconsistent block hash in json-rpc.
+- [\#733](https://github.com/cosmos/evm/pull/733) Avoid rejecting tx with unsupported extension option for ExtensionOptionDynamicFeeTx.
 
 ### IMPROVEMENTS
 
