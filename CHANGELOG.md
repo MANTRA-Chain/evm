@@ -27,6 +27,7 @@
 - [\#729](https://github.com/cosmos/evm/pull/729) Remove non-deterministic EVM pre-blocker.
 - [\#727](https://github.com/cosmos/evm/pull/727) Avoid nil pointer for `tx evm raw` due to uninitialized EVM coin info.
 - [\#723](https://github.com/cosmos/evm/pull/723) Fix TransactionIndex in receipt generation to use actual EthTxIndex instead of loop index.
+- [\#725](https://github.com/cosmos/evm/pull/725) Fix inconsistent block hash in json-rpc.
 
 ### IMPROVEMENTS
 
