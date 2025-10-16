@@ -24,6 +24,7 @@
 - [\#668](https://github.com/cosmos/evm/pull/668) Fix panic in legacy mempool when Reset() was called with a skipped header between old and new block.
 - [\#725](https://github.com/cosmos/evm/pull/725) Fix inconsistent block hash in json-rpc.
 - [\#]() Fix panic if evm mempool not used.
+- [\#729](https://github.com/cosmos/evm/pull/729) Remove non-deterministic EVM pre-blocker.
 
 ### IMPROVEMENTS
 
