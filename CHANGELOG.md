@@ -25,9 +25,11 @@
 - [\#725](https://github.com/cosmos/evm/pull/725) Fix inconsistent block hash in json-rpc.
 - [\#]() Fix panic if evm mempool not used.
 - [\#729](https://github.com/cosmos/evm/pull/729) Remove non-deterministic EVM pre-blocker.
+- [\#727](https://github.com/cosmos/evm/pull/727) Avoid nil pointer for `tx evm raw` due to uninitialized EVM coin info.
 
 ### IMPROVEMENTS
 
+- [\#708](https://github.com/cosmos/evm/pull/708) Add configurable testnet validator powers
 - [\#698](https://github.com/cosmos/evm/pull/698) Expose mempool configuration flags and move mempool configuration in app.go to helper
 - [\#538](https://github.com/cosmos/evm/pull/538) Optimize `eth_estimateGas` gRPC path: short-circuit plain transfers, add optimistic gas bound based on `MaxUsedGas`.
 - [\#513](https://github.com/cosmos/evm/pull/513) Replace `TestEncodingConfig` with production `EncodingConfig` in encoding package to remove test dependencies from production code.
