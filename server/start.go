@@ -28,12 +28,15 @@ import (
 
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/cosmos/evm/indexer"
+	evmmempool "github.com/cosmos/evm/mempool"
+	evmmetrics "github.com/cosmos/evm/metrics"
 	ethdebug "github.com/cosmos/evm/rpc/namespaces/ethereum/debug"
 	cosmosevmserverconfig "github.com/cosmos/evm/server/config"
 	srvflags "github.com/cosmos/evm/server/flags"
-	cosmosevmtypes "github.com/cosmos/evm/types"
+	servertypes "github.com/cosmos/evm/server/types"
 
 	errorsmod "cosmossdk.io/errors"
+	"cosmossdk.io/log"
 	pruningtypes "cosmossdk.io/store/pruning/types"
 
 	"github.com/cosmos/cosmos-sdk/client"
@@ -47,11 +50,22 @@ import (
 	servercmtlog "github.com/cosmos/cosmos-sdk/server/log"
 	"github.com/cosmos/cosmos-sdk/server/types"
 	"github.com/cosmos/cosmos-sdk/telemetry"
+	sdkmempool "github.com/cosmos/cosmos-sdk/types/mempool"
 	genutiltypes "github.com/cosmos/cosmos-sdk/x/genutil/types"
 )
 
 // DBOpener is a function to open `application.db`, potentially with customized options.
 type DBOpener func(opts types.AppOptions, rootDir string, backend dbm.BackendType) (dbm.DB, error)
+
+type Application interface {
+	types.Application
+	AppWithPendingTxStream
+	GetMempool() sdkmempool.ExtMempool
+	SetClientCtx(clientCtx client.Context)
+}
+
+// AppCreator is a function that allows us to lazily initialize an application implementing with AppWithPendingTxStream.
+type AppCreator func(log.Logger, dbm.DB, io.Writer, types.AppOptions) Application
 
 // StartOptions defines options that can be customized in `StartCmd`
 type StartOptions struct {
@@ -61,9 +75,11 @@ type StartOptions struct {
 }
 
 // NewDefaultStartOptions use the default db opener provided in tm-db.
-func NewDefaultStartOptions(appCreator types.AppCreator, defaultNodeHome string) StartOptions {
+func NewDefaultStartOptions(appCreator AppCreator, defaultNodeHome string) StartOptions {
 	return StartOptions{
-		AppCreator:      appCreator,
+		AppCreator: func(l log.Logger, d dbm.DB, w io.Writer, ao types.AppOptions) types.Application {
+			return appCreator(l, d, w, ao)
+		},
 		DefaultNodeHome: defaultNodeHome,
 		DBOpener:        cosmosevmserverconfig.OpenDB,
 	}
@@ -117,11 +133,11 @@ which accepts a path for the resulting pprof file.
 				return err
 			}
 
-			withTM, _ := cmd.Flags().GetBool(srvflags.WithCometBFT)
-			if !withTM {
+			withbft, _ := cmd.Flags().GetBool(srvflags.WithCometBFT)
+			if !withbft {
 				serverCtx.Logger.Info("starting ABCI without CometBFT")
 				return wrapCPUProfile(serverCtx, func() error {
-					return startStandAlone(serverCtx, opts)
+					return startStandAlone(serverCtx, clientCtx, opts)
 				})
 			}
 
@@ -168,6 +184,7 @@ which accepts a path for the resulting pprof file.
 	cmd.Flags().Uint(server.FlagInvCheckPeriod, 0, "Assert registered invariants every N blocks")
 	cmd.Flags().Uint64(server.FlagMinRetainBlocks, 0, "Minimum block height offset during ABCI commit to prune CometBFT blocks")
 	cmd.Flags().String(srvflags.AppDBBackend, "", "The type of database for application and snapshots databases")
+	cmd.Flags().Int32(server.FlagMempoolMaxTxs, 0, "The maximum number of transactions in the mempool")
 
 	cmd.Flags().Bool(srvflags.GRPCOnly, false, "Start the node in gRPC query only mode without CometBFT process")
 	cmd.Flags().Bool(srvflags.GRPCEnable, cosmosevmserverconfig.DefaultGRPCEnable, "Define if the gRPC server should be enabled")
@@ -204,6 +221,16 @@ which accepts a path for the resulting pprof file.
 	cmd.Flags().Uint64(srvflags.EVMMaxTxGasWanted, cosmosevmserverconfig.DefaultMaxTxGasWanted, "the gas wanted for each eth tx returned in ante handler in check tx mode")                                 //nolint:lll
 	cmd.Flags().Bool(srvflags.EVMEnablePreimageRecording, cosmosevmserverconfig.DefaultEnablePreimageRecording, "Enables tracking of SHA3 preimages in the EVM (not implemented yet)")                      //nolint:lll
 	cmd.Flags().Uint64(srvflags.EVMChainID, cosmosevmserverconfig.DefaultEVMChainID, "the EIP-155 compatible replay protection chain ID")
+	cmd.Flags().Uint64(srvflags.EVMMinTip, cosmosevmserverconfig.DefaultEVMMinTip, "the minimum priority fee for the mempool")
+	cmd.Flags().String(srvflags.EvmGethMetricsAddress, cosmosevmserverconfig.DefaultGethMetricsAddress, "the address to bind the geth metrics server to")
+
+	cmd.Flags().Uint64(srvflags.EVMMempoolPriceLimit, cosmosevmserverconfig.DefaultMempoolConfig().PriceLimit, "the minimum gas price to enforce for acceptance into the pool (in wei)")
+	cmd.Flags().Uint64(srvflags.EVMMempoolPriceBump, cosmosevmserverconfig.DefaultMempoolConfig().PriceBump, "the minimum price bump percentage to replace an already existing transaction (nonce)")
+	cmd.Flags().Uint64(srvflags.EVMMempoolAccountSlots, cosmosevmserverconfig.DefaultMempoolConfig().AccountSlots, "the number of executable transaction slots guaranteed per account")
+	cmd.Flags().Uint64(srvflags.EVMMempoolGlobalSlots, cosmosevmserverconfig.DefaultMempoolConfig().GlobalSlots, "the maximum number of executable transaction slots for all accounts")
+	cmd.Flags().Uint64(srvflags.EVMMempoolAccountQueue, cosmosevmserverconfig.DefaultMempoolConfig().AccountQueue, "the maximum number of non-executable transaction slots permitted per account")
+	cmd.Flags().Uint64(srvflags.EVMMempoolGlobalQueue, cosmosevmserverconfig.DefaultMempoolConfig().GlobalQueue, "the maximum number of non-executable transaction slots for all accounts")
+	cmd.Flags().Duration(srvflags.EVMMempoolLifetime, cosmosevmserverconfig.DefaultMempoolConfig().Lifetime, "the maximum amount of time non-executable transaction are queued")
 
 	cmd.Flags().String(srvflags.TLSCertPath, "", "the cert.pem file path for the server TLS configuration")
 	cmd.Flags().String(srvflags.TLSKeyPath, "", "the key.pem file path for the server TLS configuration")
@@ -220,7 +247,7 @@ which accepts a path for the resulting pprof file.
 // Parameters:
 // - svrCtx: The context object that holds server configurations, logger, and other stateful information.
 // - opts: Options for starting the server, including functions for creating the application and opening the database.
-func startStandAlone(svrCtx *server.Context, opts StartOptions) error {
+func startStandAlone(svrCtx *server.Context, clientCtx client.Context, opts StartOptions) error {
 	addr := svrCtx.Viper.GetString(srvflags.Address)
 	transport := svrCtx.Viper.GetString(srvflags.Transport)
 	home := svrCtx.Viper.GetString(flags.FlagHome)
@@ -251,6 +278,12 @@ func startStandAlone(svrCtx *server.Context, opts StartOptions) error {
 			svrCtx.Logger.Error("close application failed", "error", err.Error())
 		}
 	}()
+	evmApp, ok := app.(Application)
+	if !ok {
+		svrCtx.Logger.Error("failed to get server config", "error", err.Error())
+	}
+	evmApp.SetClientCtx(clientCtx)
+
 	config, err := cosmosevmserverconfig.GetConfig(svrCtx.Viper)
 	if err != nil {
 		svrCtx.Logger.Error("failed to get server config", "error", err.Error())
@@ -364,6 +397,11 @@ func startInProcess(svrCtx *server.Context, clientCtx client.Context, opts Start
 			logger.Error("close application failed", "error", err.Error())
 		}
 	}()
+	evmApp, ok := app.(Application)
+	if !ok {
+		svrCtx.Logger.Error("failed to get server config", "error", err.Error())
+	}
+	evmApp.SetClientCtx(clientCtx)
 
 	nodeKey, err := p2p.LoadOrGenNodeKey(cfg.NodeKeyFile())
 	if err != nil {
@@ -374,7 +412,7 @@ func startInProcess(svrCtx *server.Context, clientCtx client.Context, opts Start
 	genDocProvider := GenDocProvider(cfg)
 
 	var (
-		tmNode   *node.Node
+		bftNode  *node.Node
 		gRPCOnly = svrCtx.Viper.GetBool(srvflags.GRPCOnly)
 	)
 
@@ -386,7 +424,7 @@ func startInProcess(svrCtx *server.Context, clientCtx client.Context, opts Start
 		logger.Info("starting node with ABCI CometBFT in-process")
 
 		cmtApp := server.NewCometABCIWrapper(app)
-		tmNode, err = node.NewNode(
+		bftNode, err = node.NewNode(
 			cfg,
 			pvm.LoadOrGenFilePV(cfg.PrivValidatorKeyFile(), cfg.PrivValidatorStateFile()),
 			nodeKey,
@@ -401,14 +439,17 @@ func startInProcess(svrCtx *server.Context, clientCtx client.Context, opts Start
 			return err
 		}
 
-		if err := tmNode.Start(); err != nil {
+		if err := bftNode.Start(); err != nil {
 			logger.Error("failed start CometBFT server", "error", err.Error())
 			return err
 		}
 
+		if m, ok := evmApp.GetMempool().(*evmmempool.ExperimentalEVMMempool); ok && m != nil {
+			m.SetEventBus(bftNode.EventBus())
+		}
 		defer func() {
-			if tmNode.IsRunning() {
-				_ = tmNode.Stop()
+			if bftNode.IsRunning() {
+				_ = bftNode.Stop()
 			}
 		}()
 	}
@@ -416,8 +457,8 @@ func startInProcess(svrCtx *server.Context, clientCtx client.Context, opts Start
 	// Add the tx service to the gRPC router. We only need to register this
 	// service if API or gRPC or JSONRPC is enabled, and avoid doing so in the general
 	// case, because it spawns a new local CometBFT RPC client.
-	if (config.API.Enable || config.GRPC.Enable || config.JSONRPC.Enable || config.JSONRPC.EnableIndexer) && tmNode != nil {
-		clientCtx = clientCtx.WithClient(local.New(tmNode))
+	if (config.API.Enable || config.GRPC.Enable || config.JSONRPC.Enable || config.JSONRPC.EnableIndexer) && bftNode != nil {
+		clientCtx = clientCtx.WithClient(local.New(bftNode))
 
 		app.RegisterTxService(clientCtx)
 		app.RegisterTendermintService(clientCtx)
@@ -435,7 +476,7 @@ func startInProcess(svrCtx *server.Context, clientCtx client.Context, opts Start
 		ethmetricsexp.Setup(config.JSONRPC.MetricsAddress)
 	}
 
-	var idxer cosmosevmtypes.EVMTxIndexer
+	var idxer servertypes.EVMTxIndexer
 	if config.JSONRPC.EnableIndexer {
 		idxDB, err := OpenIndexerDB(home, server.GetAppDBBackend(svrCtx.Viper))
 		if err != nil {
@@ -491,14 +532,14 @@ func startInProcess(svrCtx *server.Context, clientCtx client.Context, opts Start
 		defer grpcSrv.GracefulStop()
 	}
 
-	startAPIServer(ctx, svrCtx, clientCtx, g, config.Config, app, grpcSrv, metrics)
+	startAPIServer(ctx, svrCtx, clientCtx, g, config.Config, app, grpcSrv, metrics, config.EVM.GethMetricsAddress)
 
 	if config.JSONRPC.Enable {
 		txApp, ok := app.(AppWithPendingTxStream)
 		if !ok {
 			return fmt.Errorf("json-rpc server requires AppWithPendingTxStream")
 		}
-		_, err = StartJSONRPC(ctx, svrCtx, clientCtx, g, &config, idxer, txApp)
+		_, err = StartJSONRPC(ctx, svrCtx, clientCtx, g, &config, idxer, txApp, evmApp.GetMempool().(*evmmempool.ExperimentalEVMMempool))
 		if err != nil {
 			return err
 		}
@@ -662,6 +703,7 @@ func startAPIServer(
 	app types.Application,
 	grpcSrv *grpc.Server,
 	metrics *telemetry.Metrics,
+	gethMetricsAddress string,
 ) {
 	if !svrCfg.API.Enable {
 		return
@@ -672,6 +714,9 @@ func startAPIServer(
 
 	if svrCfg.Telemetry.Enabled {
 		apiSrv.SetTelemetry(metrics)
+		g.Go(func() error {
+			return evmmetrics.StartGethMetricServer(ctx, svrCtx.Logger.With("server", "geth_metrics"), gethMetricsAddress)
+		})
 	}
 
 	g.Go(func() error {
