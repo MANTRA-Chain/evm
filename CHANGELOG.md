@@ -2,6 +2,12 @@
 
 ## UNRELEASED
 
+### BUG FIXES
+
+- [\#15](https://github.com/MANTRA-Chain/evm/pull/15) remove unnecessary validation on sender address by ibc middleware
+
+## v0.5.0
+
 ### DEPENDENCIES
 
 ### BUG FIXES
