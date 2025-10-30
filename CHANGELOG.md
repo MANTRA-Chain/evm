@@ -2,6 +2,12 @@
 
 ## UNRELEASED
 
+### BUG FIXES
+
+- [\#16](https://github.com/MANTRA-Chain/evm/pull/16) fix evmCoinInfo panic in historical query.
+
+## v0.5.0
+
 ### DEPENDENCIES
 
 ### BUG FIXES
