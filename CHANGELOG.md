@@ -6,6 +6,7 @@
 
 - [\#15](https://github.com/MANTRA-Chain/evm/pull/15) remove unnecessary validation on sender address by ibc middleware
 - [\#16](https://github.com/MANTRA-Chain/evm/pull/16) fix evmCoinInfo panic in historical query.
+- [\#17](https://github.com/MANTRA-Chain/evm/pull/17) Avoid nil pointer when RPC requests execute before evmCoinInfo initialization in PreBlock with defaultEvmCoinInfo fallback.
 
 ## v0.5.0
 
