@@ -105,12 +105,12 @@ func (_m *StakingKeeper) GetValidatorByConsAddr(ctx context.Context, consAddr co
 	return r0, r1
 }
 
-// TotalValidatorPower provides a mock function with given fields: ctx
-func (_m *StakingKeeper) TotalValidatorPower(ctx context.Context) (math.Int, error) {
+// TotalBondedTokens provides a mock function with given fields: ctx
+func (_m *StakingKeeper) TotalBondedTokens(ctx context.Context) (math.Int, error) {
 	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
-		panic("no return value specified for TotalValidatorPower")
+		panic("no return value specified for TotalBondedTokens")
 	}
 
 	var r0 math.Int
