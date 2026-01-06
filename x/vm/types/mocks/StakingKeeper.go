@@ -9,8 +9,6 @@ import (
 
 	cosmos_sdktypes "github.com/cosmos/cosmos-sdk/types"
 
-	math "cosmossdk.io/math"
-
 	mock "github.com/stretchr/testify/mock"
 
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
@@ -98,34 +96,6 @@ func (_m *StakingKeeper) GetValidatorByConsAddr(ctx context.Context, consAddr co
 
 	if rf, ok := ret.Get(1).(func(context.Context, cosmos_sdktypes.ConsAddress) error); ok {
 		r1 = rf(ctx, consAddr)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// TotalBondedTokens provides a mock function with given fields: ctx
-func (_m *StakingKeeper) TotalBondedTokens(ctx context.Context) (math.Int, error) {
-	ret := _m.Called(ctx)
-
-	if len(ret) == 0 {
-		panic("no return value specified for TotalBondedTokens")
-	}
-
-	var r0 math.Int
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context) (math.Int, error)); ok {
-		return rf(ctx)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context) math.Int); ok {
-		r0 = rf(ctx)
-	} else {
-		r0 = ret.Get(0).(math.Int)
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(ctx)
 	} else {
 		r1 = ret.Error(1)
 	}
