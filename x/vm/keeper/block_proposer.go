@@ -3,22 +3,15 @@ package keeper
 import (
 	"github.com/ethereum/go-ethereum/common"
 
-	errorsmod "cosmossdk.io/errors"
-
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 )
 
 // GetCoinbaseAddress returns the block proposer's validator operator address.
+// Returns zero address if any error occurs.
 func (k Keeper) GetCoinbaseAddress(ctx sdk.Context, proposerAddress sdk.ConsAddress) (common.Address, error) {
 	validator, err := k.stakingKeeper.GetValidatorByConsAddr(ctx, GetProposerAddress(ctx, proposerAddress))
 	if err != nil {
-		return common.Address{}, errorsmod.Wrapf(
-			stakingtypes.ErrNoValidatorFound,
-			"failed to retrieve validator from block proposer address %s. Error: %s",
-			proposerAddress.String(),
-			err.Error(),
-		)
+		return common.Address{}, nil
 	}
 
 	coinbase := common.BytesToAddress([]byte(validator.GetOperator()))
