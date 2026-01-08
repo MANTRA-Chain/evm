@@ -24,6 +24,8 @@ Follow the [migration document](docs/migrations/v0.5.x_to_v0.6.0.md) for upgrade
 
 ### FEATURES
 
+- [\#815](https://github.com/cosmos/evm/pull/815) Support for multi gRPC query clients serve with old binary.
+
 ### BUG FIXES
 
 - [\#690](https://github.com/cosmos/evm/pull/690) Fix Ledger hardware wallet support for coin type 60.
