@@ -11,6 +11,7 @@ import (
 	transfertypes "github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
 	channeltypes "github.com/cosmos/ibc-go/v10/modules/core/04-channel/types"
 	"github.com/cosmos/ibc-go/v10/modules/core/exported"
+	ccvtypes "github.com/cosmos/interchain-security/v7/x/ccv/types"
 
 	errorsmod "cosmossdk.io/errors"
 	storetypes "cosmossdk.io/store/types"
@@ -48,6 +49,11 @@ func (k Keeper) OnRecvPacket(
 		// been decoded on ICS20 transfer logic
 		err = errorsmod.Wrapf(errortypes.ErrInvalidType, "cannot unmarshal ICS-20 transfer packet data")
 		return channeltypes.NewErrorAcknowledgement(err)
+	}
+
+	// skip conversion for CCV reward packets
+	if _, err := ccvtypes.GetRewardMemoFromTransferMemo(data.Memo); err == nil {
+		return ack
 	}
 
 	// use a zero gas config to avoid extra costs for the relayers
