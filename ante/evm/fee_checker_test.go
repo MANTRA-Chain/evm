@@ -59,6 +59,7 @@ func TestSDKTxFeeChecker(t *testing.T) {
 
 	genesisCtx := sdk.NewContext(nil, tmproto.Header{}, false, log.NewNopLogger())
 	checkTxCtx := sdk.NewContext(nil, tmproto.Header{Height: 1}, true, log.NewNopLogger()).WithMinGasPrices(minGasPrices)
+	checkTxCtxNoMinGasPrices := sdk.NewContext(nil, tmproto.Header{Height: 1}, true, log.NewNopLogger())
 	deliverTxCtx := sdk.NewContext(nil, tmproto.Header{Height: 1}, false, log.NewNopLogger())
 
 	feemarketParams := feemarkettypes.Params{}
@@ -73,6 +74,25 @@ func TestSDKTxFeeChecker(t *testing.T) {
 		expPriority       int64
 		expSuccess        bool
 	}{
+		{
+			"success, non-evm fee denom bypasses base fee",
+			checkTxCtxNoMinGasPrices,
+			func() feemarkettypes.Params {
+				p := feemarketParams
+				p.BaseFee = math.LegacyNewDec(10)
+				return p
+			},
+			func() sdk.FeeTx {
+				txBuilder := encodingConfig.TxConfig.NewTxBuilder()
+				txBuilder.SetGasLimit(1)
+				txBuilder.SetFeeAmount(sdk.NewCoins(sdk.NewCoin("ibc/DEADBEEF", math.NewInt(1))))
+				return txBuilder.GetTx()
+			},
+			true,
+			"1ibc/DEADBEEF",
+			0,
+			true,
+		},
 		{
 			"success, genesis tx",
 			genesisCtx,

@@ -65,6 +65,22 @@ func (s *AnteTestSuite) TestMinGasPriceDecorator() {
 			true,
 		},
 		{
+			"valid cosmos tx with ibc denom fee",
+			func() sdk.Tx {
+				params := nw.App.GetFeeMarketKeeper().GetParams(ctx)
+				params.MinGasPrice = math.LegacyZeroDec()
+				err := nw.App.GetFeeMarketKeeper().SetParams(ctx, params)
+				s.Require().NoError(err)
+
+				ibcDenom := "ibc/DEADBEEF"
+				txBuilder := s.CreateTestCosmosTxBuilder(math.NewInt(0), ibcDenom, &testMsg)
+				return txBuilder.GetTx()
+			},
+			true,
+			"",
+			true,
+		},
+		{
 			"valid cosmos tx with MinGasPrices = 0, gasPrice > 0",
 			func() sdk.Tx {
 				params := nw.App.GetFeeMarketKeeper().GetParams(ctx)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"slices"
+	"strings"
 
 	feemarkettypes "github.com/cosmos/evm/x/feemarket/types"
 	evmtypes "github.com/cosmos/evm/x/vm/types"
@@ -41,11 +42,27 @@ func (mpd MinGasPriceDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate 
 	feeCoins := feeTx.GetFee()
 	evmDenom := evmtypes.GetEVMCoinDenom()
 
-	// only allow user to pass in aatom and stake native token as transaction fees
-	// allow use stake native tokens for fees is just for unit tests to pass
-	//
-	// TODO: is the handling of stake necessary here? Why not adjust the tests to contain the correct denom?
-	validFees := len(feeCoins) == 0 || (len(feeCoins) == 1 && slices.Contains([]string{evmDenom, sdk.DefaultBondDenom}, feeCoins.GetDenomByIndex(0)))
+	allowedFeeDenom := func(denom string) bool {
+		if slices.Contains([]string{evmDenom, sdk.DefaultBondDenom}, denom) {
+			return true
+		}
+
+		// Allow IBC vouchers (e.g. `ibc/<hash>`) as fee denoms.
+		if strings.HasPrefix(denom, "ibc/") {
+			return true
+		}
+
+		// Allow additional fee denoms only when explicitly configured via
+		// app.toml `minimum-gas-prices` (available via `ctx.MinGasPrices()`).
+		for _, gp := range ctx.MinGasPrices() {
+			if gp.Denom == denom {
+				return true
+			}
+		}
+		return false
+	}
+
+	validFees := len(feeCoins) == 0 || (len(feeCoins) == 1 && allowedFeeDenom(feeCoins.GetDenomByIndex(0)))
 	if !validFees && !simulate {
 		return ctx, fmt.Errorf("expected only native token %s for fee, but got %s", evmDenom, feeCoins.String())
 	}

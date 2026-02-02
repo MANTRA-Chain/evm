@@ -38,6 +38,13 @@ func NewDynamicFeeChecker(feemarketParams *feemarkettypes.Params) authante.TxFee
 			return checkTxFeeWithValidatorMinGasPrices(ctx, feeTx)
 		}
 		denom := evmtypes.GetEVMCoinDenom()
+		feeCoins := feeTx.GetFee()
+
+		// If the tx fee is not paid in the EVM denom (e.g. `ibc/<hash>`), skip EIP-1559
+		// checks and fall back to validator min-gas-prices.
+		if len(feeCoins) == 1 && feeCoins.GetDenomByIndex(0) != denom {
+			return checkTxFeeWithValidatorMinGasPrices(ctx, feeTx)
+		}
 		ethCfg := evmtypes.GetEthChainConfig()
 
 		return FeeChecker(ctx, feemarketParams, denom, ethCfg, feeTx)
