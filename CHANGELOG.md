@@ -25,6 +25,7 @@ Follow the [migration document](docs/migrations/v0.5.x_to_v0.6.0.md) for upgrade
 ### FEATURES
 
 - [\#815](https://github.com/cosmos/evm/pull/815) Support for multi gRPC query clients serve with old binary.
+- [\#1007](https://github.com/cosmos/evm/pull/1007) Add `getproof-storage-keys-cap` in JSON-RPC config to cap `eth_getProof` storage keys and tighten filter limits.
 
 ### BUG FIXES
 

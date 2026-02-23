@@ -42,7 +42,15 @@ func (b *Backend) GetCode(address common.Address, blockNrOrHash rpctypes.BlockNu
 }
 
 // GetProof returns an account object with proof and any storage proofs
-func (b *Backend) GetProof(address common.Address, storageKeys []string, blockNrOrHash rpctypes.BlockNumberOrHash) (*rpctypes.AccountResult, error) {
+func (b *Backend) GetProof(address common.Address, storageKeys []string, blockNrOrHash rpctypes.BlockNumberOrHash) (result *rpctypes.AccountResult, err error) {
+	maxStorageKeys := int(b.Cfg.JSONRPC.GetProofStorageKeysCap)
+	if maxStorageKeys == 0 {
+		return nil, errors.New("eth_getProof is disabled")
+	}
+	if maxStorageKeys > 0 && len(storageKeys) > maxStorageKeys {
+		return nil, fmt.Errorf("too many storage keys requested: got %d max %d", len(storageKeys), maxStorageKeys)
+	}
+
 	blockNum, err := b.BlockNumberFromComet(blockNrOrHash)
 	if err != nil {
 		return nil, err
