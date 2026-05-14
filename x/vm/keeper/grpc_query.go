@@ -379,17 +379,9 @@ func (k Keeper) EstimateGasInternal(c context.Context, req *types.EthCallRequest
 
 	// create a helper to check if a gas allowance results in an executable transaction
 	executable := func(gas uint64) (vmError bool, rsp *types.MsgEthereumTxResponse, err error) {
-		// Treat cosmos meter OOM panics (preserve-KvGasConfig mode) as a
-		// "raise gas" signal so the binary search continues.
-		defer func() {
-			if r := recover(); r != nil {
-				if _, ok := r.(storetypes.ErrorOutOfGas); ok {
-					vmError, rsp, err = true, nil, nil
-					return
-				}
-				panic(r)
-			}
-		}()
+		// Convert cosmos meter OOM (panic or return) into a "raise gas" signal.
+		defer rewriteOutOfGasAsRaiseGas(&vmError, &rsp, &err)
+		defer recoverMeterOOM(&err)
 
 		// update the message with the new gas value
 		msg.GasLimit = gas
@@ -419,7 +411,7 @@ func (k Keeper) EstimateGasInternal(c context.Context, req *types.EthCallRequest
 		stateDB := statedb.New(tmpCtx, &k, txConfig)
 		rsp, err = k.ApplyMessageWithConfig(tmpCtx, stateDB, *msg, nil, false, false, cfg, txConfig, false, nil)
 		if err != nil {
-			if errors.Is(err, core.ErrIntrinsicGas) || errors.Is(err, core.ErrFloorDataGas) {
+			if errors.Is(err, core.ErrIntrinsicGas) || errors.Is(err, core.ErrFloorDataGas) || errors.Is(err, vm.ErrOutOfGas) {
 				return true, nil, nil // Special case, raise gas limit
 			}
 			return true, nil, err // Bail out
@@ -570,11 +562,16 @@ func (k Keeper) TraceTx(c context.Context, req *types.QueryTraceTxRequest) (*typ
 		// we ignore the error here. this endpoint, ideally, is called internally from the ETH backend, which will call this query
 		// using all previous txs in the trace transaction's block. some of those _could_ be invalid transactions.
 		stateDB := statedb.New(ctx, &k, txConfig)
-		rsp, _ := k.ApplyMessageWithConfig(ctx, stateDB, *msg, nil, true, false, cfg, txConfig, false, nil)
-		if rsp != nil {
-			ctx.GasMeter().ConsumeGas(rsp.GasUsed, "evm predecessor tx")
-			txConfig.LogIndex += uint(len(rsp.Logs))
-		}
+		// Closure-scoped recover so one predecessor's OOM doesn't abort the trace.
+		func() {
+			var applyErr error
+			defer recoverMeterOOM(&applyErr)
+			rsp, _ := k.ApplyMessageWithConfig(ctx, stateDB, *msg, nil, true, false, cfg, txConfig, false, nil)
+			if applyErr == nil && rsp != nil {
+				ctx.GasMeter().ConsumeGas(rsp.GasUsed, "evm predecessor tx")
+				txConfig.LogIndex += uint(len(rsp.Logs))
+			}
+		}()
 	}
 
 	tx := req.Msg.AsTransaction()
@@ -772,13 +769,12 @@ func (k *Keeper) traceTxWithMsg(
 	msg *core.Message,
 	traceConfig *types.TraceConfig,
 	commitMessage bool,
-) (*interface{}, uint, error) {
+) (_ *interface{}, _ uint, err error) {
 	// Assemble the structured logger or the JavaScript tracer
 	var (
 		tracer           *tracers.Tracer
 		overrides        *ethparams.ChainConfig
 		jsonTracerConfig json.RawMessage
-		err              error
 		timeout          = defaultTraceTimeout
 	)
 
@@ -849,7 +845,11 @@ func (k *Keeper) traceTxWithMsg(
 	// Build EVM execution context
 	ctx = buildTraceCtx(ctx, msg.GasLimit, k.shouldPreserveKVGasConfig(ctx, msg.To))
 	stateDB := statedb.New(ctx, k, txConfig)
-	res, err := k.ApplyMessageWithConfig(ctx, stateDB, *msg, tracer.Hooks, commitMessage, false, cfg, txConfig, false, nil)
+	// Wrap any cosmos meter OOM (panic or return) in a gRPC status error.
+	defer wrapOutOfGasAsInternal(&err)
+	defer recoverMeterOOM(&err)
+	var res *types.MsgEthereumTxResponse
+	res, err = k.ApplyMessageWithConfig(ctx, stateDB, *msg, tracer.Hooks, commitMessage, false, cfg, txConfig, false, nil)
 	if err != nil {
 		return nil, 0, status.Error(codes.Internal, err.Error())
 	}
@@ -906,12 +906,45 @@ func (k Keeper) shouldPreserveKVGasConfig(ctx sdk.Context, to *common.Address) b
 
 	if k.erc20Keeper != nil {
 		_, found, err := k.erc20Keeper.GetERC20PrecompileInstance(ctx, *to)
-		if err == nil && found {
+		if err != nil {
+			k.Logger(ctx).Error("ERC20 precompile lookup failed, falling back to preserve=false", "address", to.Hex(), "error", err)
+			return false
+		}
+		if found {
 			return true
 		}
 	}
 
 	return false
+}
+
+// recoverMeterOOM is a deferred helper that converts a cosmos meter
+// ErrorOutOfGas panic into vm.ErrOutOfGas, other panics re-propagate.
+func recoverMeterOOM(err *error) {
+	if r := recover(); r != nil {
+		if _, ok := r.(storetypes.ErrorOutOfGas); ok {
+			*err = vm.ErrOutOfGas
+			return
+		}
+		panic(r)
+	}
+}
+
+// rewriteOutOfGasAsRaiseGas converts vm.ErrOutOfGas returns into
+// (vmError=true, rsp=nil, err=nil) so estimate binary search raises gas.
+func rewriteOutOfGasAsRaiseGas(vmError *bool, rsp **types.MsgEthereumTxResponse, err *error) {
+	if errors.Is(*err, vm.ErrOutOfGas) {
+		*vmError = true
+		*rsp = nil
+		*err = nil
+	}
+}
+
+// wrapOutOfGasAsInternal converts vm.ErrOutOfGas into a gRPC Internal error.
+func wrapOutOfGasAsInternal(err *error) {
+	if errors.Is(*err, vm.ErrOutOfGas) {
+		*err = status.Error(codes.Internal, (*err).Error())
+	}
 }
 
 // buildTraceCtx builds a context for simulating or tracing transactions.
