@@ -764,12 +764,13 @@ func (k *Keeper) traceTxWithMsg(
 	msg *core.Message,
 	traceConfig *types.TraceConfig,
 	commitMessage bool,
-) (_ *interface{}, _ uint, err error) {
+) (*interface{}, uint, error) {
 	// Assemble the structured logger or the JavaScript tracer
 	var (
 		tracer           *tracers.Tracer
 		overrides        *ethparams.ChainConfig
 		jsonTracerConfig json.RawMessage
+		err              error
 		timeout          = defaultTraceTimeout
 	)
 
@@ -840,8 +841,7 @@ func (k *Keeper) traceTxWithMsg(
 	// Build EVM execution context
 	ctx = buildTraceCtx(ctx, msg.GasLimit)
 	stateDB := statedb.New(ctx, k, txConfig)
-	var res *types.MsgEthereumTxResponse
-	res, err = k.ApplyMessageWithConfig(ctx, stateDB, *msg, tracer.Hooks, commitMessage, false, cfg, txConfig, false, nil)
+	res, err := k.ApplyMessageWithConfig(ctx, stateDB, *msg, tracer.Hooks, commitMessage, false, cfg, txConfig, false, nil)
 	if err != nil {
 		return nil, 0, status.Error(codes.Internal, err.Error())
 	}
@@ -886,10 +886,9 @@ func (k Keeper) Config(_ context.Context, _ *types.QueryConfigRequest) (*types.Q
 	return &types.QueryConfigResponse{Config: config}, nil
 }
 
-// buildTraceCtx prepares a simulation/tracing ctx. Clears KV/transient gas
-// configs (consistent with deliverTx's ante and EthCall) and installs an
-// outer infinite-with-limit meter. EVM gas accounting is handled by each
-// precompile's per-call inner meter and contract.UseGas.
+// buildTraceCtx builds a context for simulating or tracing transactions by:
+// 1. assigning a new infinite gas meter with the provided gasLimit
+// 2. calling BuildEvmExecutionCtx to set up gas configs consistent with Ethereum transaction execution.
 func buildTraceCtx(ctx sdk.Context, gasLimit uint64) sdk.Context {
 	return evmante.BuildEvmExecutionCtx(ctx).
 		WithGasMeter(types.NewInfiniteGasMeterWithLimit(gasLimit))
