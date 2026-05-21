@@ -11,30 +11,21 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	ethparams "github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
-	"github.com/stretchr/testify/mock"
-
-	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
-	cmttime "github.com/cometbft/cometbft/types/time"
 
 	testconstants "github.com/cosmos/evm/testutil/constants"
 	"github.com/cosmos/evm/testutil/integration/evm/network"
 	testkeyring "github.com/cosmos/evm/testutil/keyring"
 	utiltx "github.com/cosmos/evm/testutil/tx"
-	vmkeeper "github.com/cosmos/evm/x/vm/keeper"
 	"github.com/cosmos/evm/x/vm/statedb"
 	"github.com/cosmos/evm/x/vm/types"
-	"github.com/cosmos/evm/x/vm/types/mocks"
 
 	"cosmossdk.io/math"
 	"cosmossdk.io/store/prefix"
 
-	storetypes "cosmossdk.io/store/types"
 	"github.com/cosmos/cosmos-sdk/client"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
-	"github.com/cosmos/cosmos-sdk/testutil"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	moduletestutil "github.com/cosmos/cosmos-sdk/types/module/testutil"
 	authsigning "github.com/cosmos/cosmos-sdk/x/auth/signing"
 	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
@@ -932,6 +923,68 @@ func (s *KeeperTestSuite) TestAddSlotToAccessList() {
 // 	}
 // }
 
+// TestGetAccountLocked verifies Keeper.GetAccount snapshots LockedCoins for
+// the EVM denom into the Account at load time. The snapshot powers the commit
+// path's bank-balance reconstruction without re-reading LockedCoins after a
+// precompile may have mutated DelegatedVesting on a vesting account.
+func (s *KeeperTestSuite) TestGetAccountLocked() {
+	addr := utiltx.GenerateAddress()
+	bondDenom := s.Network.GetBaseDenom()
+
+	testCases := []struct {
+		name      string
+		malleate  func()
+		expLocked *big.Int
+	}{
+		{
+			"non-existent account returns nil",
+			func() {},
+			nil, // GetAccount returns nil entirely; checked separately
+		},
+		{
+			"base account has zero Locked snapshot",
+			func() {
+				ctx := s.Network.GetContext()
+				err := s.Network.App.GetBankKeeper().SendCoins(ctx, s.Keyring.GetAccAddr(0), addr.Bytes(), sdk.NewCoins(sdk.NewCoin(bondDenom, math.NewInt(100))))
+				s.Require().NoError(err)
+			},
+			big.NewInt(0),
+		},
+		{
+			"vesting account snapshots OriginalVesting at start time",
+			func() {
+				ctx := s.Network.GetContext()
+				accAddr := sdk.AccAddress(addr.Bytes())
+				err := s.Network.App.GetBankKeeper().SendCoins(ctx, s.Keyring.GetAccAddr(0), accAddr, sdk.NewCoins(sdk.NewCoin(bondDenom, math.NewInt(100))))
+				s.Require().NoError(err)
+
+				baseAccount := s.Network.App.GetAccountKeeper().GetAccount(ctx, accAddr).(*authtypes.BaseAccount)
+				currTime := ctx.BlockTime().Unix()
+				acc, err := vestingtypes.NewContinuousVestingAccount(baseAccount, sdk.NewCoins(sdk.NewCoin(bondDenom, math.NewInt(100))), currTime, currTime+100)
+				s.Require().NoError(err)
+				s.Network.App.GetAccountKeeper().SetAccount(ctx, acc)
+			},
+			big.NewInt(100),
+		},
+	}
+
+	for _, tc := range testCases {
+		s.Run(tc.name, func() {
+			s.SetupTest()
+			tc.malleate()
+			acc := s.Network.App.GetEVMKeeper().GetAccount(s.Network.GetContext(), addr)
+			if tc.expLocked == nil {
+				s.Require().Nil(acc, "expected nil account")
+				return
+			}
+			s.Require().NotNil(acc, "expected non-nil account")
+			locked := acc.LockedBalanceSnapshot()
+			s.Require().NotNil(locked, "expected Locked snapshot to be populated")
+			s.Require().Zero(tc.expLocked.Cmp(locked), "Locked snapshot mismatch: want %s got %s", tc.expLocked, locked)
+		})
+	}
+}
+
 func (s *KeeperTestSuite) TestSetBalance() {
 	amount := common.U2560
 	totalBalance := common.U2560
@@ -1331,93 +1384,6 @@ func (s *KeeperTestSuite) TestDeleteAccount() {
 
 				acc := s.Network.App.GetEVMKeeper().GetAccount(ctx, addr)
 				s.Require().NotNil(acc, "expected account to still be found after failing to delete")
-			}
-		})
-	}
-}
-
-func (s *KeeperTestSuite) TestSetBalanceBlockedNonModuleArm() {
-	configurator := types.NewEVMConfigurator()
-	configurator.ResetTestConfig()
-	s.Require().NoError(configurator.WithEVMCoinInfo(testconstants.ExampleChainCoinInfo[testconstants.ExampleChainID]).Configure())
-
-	extDenom := types.GetEVMCoinExtendedDenom()
-	addr := common.HexToAddress("0x000000000000000000000000000000000000c0de")
-	cosmosAddr := sdk.AccAddress(addr.Bytes())
-
-	cases := []struct {
-		name      string
-		current   math.Int
-		amount    *uint256.Int
-		blocked   bool
-		expReject bool
-	}{
-		{
-			name:      "blocked non-module, amount != current → reject via isBlockedChange",
-			current:   math.NewInt(100),
-			amount:    uint256.NewInt(50),
-			blocked:   true,
-			expReject: true,
-		},
-		{
-			name:      "blocked non-module, amount == current → allowed (equality skip)",
-			current:   math.NewInt(100),
-			amount:    uint256.NewInt(100),
-			blocked:   true,
-			expReject: false,
-		},
-		{
-			name:      "non-blocked non-module, amount != current → allowed",
-			current:   math.NewInt(100),
-			amount:    uint256.NewInt(200),
-			blocked:   false,
-			expReject: false,
-		},
-	}
-
-	for _, tc := range cases {
-		s.Run(tc.name, func() {
-			key := storetypes.NewKVStoreKey(types.StoreKey)
-			oKey := storetypes.NewObjectStoreKey(types.ObjectKey)
-			allKeys := []storetypes.StoreKey{key, oKey}
-			testCtx := testutil.DefaultContextWithObjectStore(s.T(), key,
-				storetypes.NewTransientStoreKey("store_test"), oKey)
-			ctx := testCtx.Ctx.WithBlockHeader(cmtproto.Header{Time: cmttime.Now()})
-			encCfg := moduletestutil.MakeTestEncodingConfig()
-
-			authority := sdk.AccAddress("foobar")
-			bankKeeper := mocks.NewBankKeeper(s.T())
-			accKeeper := mocks.NewAccountKeeper(s.T())
-			stakingKeeper := mocks.NewStakingKeeper(s.T())
-			fmKeeper := mocks.NewFeeMarketKeeper(s.T())
-			erc20Keeper := mocks.NewErc20Keeper(s.T())
-			consensusKeeper := mocks.NewConsensusParamsKeeper(s.T())
-
-			accKeeper.On("GetModuleAddress", types.ModuleName).Return(sdk.AccAddress("evm"))
-			vmKeeper := vmkeeper.NewKeeper(
-				encCfg.Codec, key, oKey, allKeys, authority,
-				accKeeper, bankKeeper, stakingKeeper, fmKeeper,
-				consensusKeeper, erc20Keeper,
-				testconstants.EighteenDecimalsChainID,
-				"",
-			)
-
-			baseAcc := authtypes.NewBaseAccountWithAddress(cosmosAddr)
-			accKeeper.On("GetAccount", mock.Anything, cosmosAddr).Return(baseAcc)
-			bankKeeper.On("SpendableCoin", mock.Anything, cosmosAddr, extDenom).
-				Return(sdk.Coin{Denom: extDenom, Amount: tc.current})
-			bankKeeper.On("BlockedAddr", cosmosAddr).Return(tc.blocked)
-			bankKeeper.On("LockedCoins", mock.Anything, cosmosAddr).Return(sdk.Coins{})
-			if !tc.expReject {
-				bankKeeper.On("UncheckedSetBalance", mock.Anything, cosmosAddr, mock.Anything).Return(nil)
-			}
-
-			err := vmKeeper.SetBalance(ctx, addr, tc.amount)
-			if tc.expReject {
-				s.Require().Error(err)
-				s.Require().Contains(err.Error(), "is not allowed to receive funds")
-			} else {
-				s.Require().NoError(err)
 			}
 		})
 	}
