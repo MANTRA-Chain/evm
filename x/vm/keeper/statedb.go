@@ -150,10 +150,14 @@ func (k *Keeper) SetBalanceWithLocked(ctx sdk.Context, addr common.Address, amou
 	}
 	cosmosAddr := sdk.AccAddress(addr.Bytes())
 
+	isModule := false
 	if acct := k.accountKeeper.GetAccount(ctx, cosmosAddr); acct != nil {
-		if _, isModule := acct.(sdk.ModuleAccountI); isModule {
-			return errorsmod.Wrapf(errortypes.ErrUnauthorized, "%s is not allowed to receive funds", cosmosAddr)
-		}
+		_, isModule = acct.(sdk.ModuleAccountI)
+	}
+	coin := k.bankWrapper.SpendableCoin(ctx, cosmosAddr, types.GetEVMCoinDenom())
+	isBlockedChange := k.bankWrapper.BlockedAddr(cosmosAddr) && amount.ToBig().Cmp(coin.Amount.BigInt()) != 0
+	if isModule || isBlockedChange {
+		return errorsmod.Wrapf(errortypes.ErrUnauthorized, "%s is not allowed to receive funds", cosmosAddr.String())
 	}
 
 	// Reconstruct the target bank balance as spendable + locked snapshot,

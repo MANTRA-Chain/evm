@@ -424,6 +424,20 @@ func (mr *MockBankKeeperMockRecorder) SetDenomMetaData(ctx, denomMetaData any) *
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDenomMetaData", reflect.TypeOf((*MockBankKeeper)(nil).SetDenomMetaData), ctx, denomMetaData)
 }
 
+// BlockedAddr mocks base method.
+func (m *MockBankKeeper) BlockedAddr(addr types.AccAddress) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BlockedAddr", addr)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// BlockedAddr indicates an expected call of BlockedAddr.
+func (mr *MockBankKeeperMockRecorder) BlockedAddr(addr any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BlockedAddr", reflect.TypeOf((*MockBankKeeper)(nil).BlockedAddr), addr)
+}
+
 // SpendableCoin mocks base method.
 func (m *MockBankKeeper) SpendableCoin(ctx context.Context, addr types.AccAddress, denom string) types.Coin {
 	m.ctrl.T.Helper()
@@ -672,6 +686,20 @@ func NewMockBankWrapper(ctrl *gomock.Controller) *MockBankWrapper {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockBankWrapper) EXPECT() *MockBankWrapperMockRecorder {
 	return m.recorder
+}
+
+// BlockedAddr mocks base method.
+func (m *MockBankWrapper) BlockedAddr(addr types.AccAddress) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BlockedAddr", addr)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// BlockedAddr indicates an expected call of BlockedAddr.
+func (mr *MockBankWrapperMockRecorder) BlockedAddr(addr any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BlockedAddr", reflect.TypeOf((*MockBankWrapper)(nil).BlockedAddr), addr)
 }
 
 // BurnAmountFromAccount mocks base method.
