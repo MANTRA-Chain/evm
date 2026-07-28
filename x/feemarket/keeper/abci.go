@@ -3,6 +3,8 @@ package keeper
 import (
 	"errors"
 	"fmt"
+	gomath "math"
+	"math/big"
 
 	"github.com/cosmos/evm/x/feemarket/types"
 
@@ -60,13 +62,13 @@ func (k *Keeper) EndBlock(ctx sdk.Context) error {
 	if !gasWanted.IsInt64() {
 		err := fmt.Errorf("integer overflow by integer type conversion. Gas wanted > MaxInt64. Gas wanted: %s", gasWanted)
 		k.Logger(ctx).Error(err.Error())
-		return err
+		gasWanted = math.NewIntFromBigIntMut(big.NewInt(gomath.MaxInt64))
 	}
 
 	if !gasUsed.IsInt64() {
 		err := fmt.Errorf("integer overflow by integer type conversion. Gas used > MaxInt64. Gas used: %s", gasUsed)
 		k.Logger(ctx).Error(err.Error())
-		return err
+		gasUsed = math.NewIntFromBigIntMut(big.NewInt(gomath.MaxInt64))
 	}
 
 	// to prevent BaseFee manipulation we limit the gasWanted so that

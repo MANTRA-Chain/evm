@@ -11,21 +11,30 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	ethparams "github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
+	"github.com/stretchr/testify/mock"
+
+	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
+	cmttime "github.com/cometbft/cometbft/types/time"
 
 	testconstants "github.com/cosmos/evm/testutil/constants"
 	"github.com/cosmos/evm/testutil/integration/evm/network"
 	testkeyring "github.com/cosmos/evm/testutil/keyring"
 	utiltx "github.com/cosmos/evm/testutil/tx"
+	vmkeeper "github.com/cosmos/evm/x/vm/keeper"
 	"github.com/cosmos/evm/x/vm/statedb"
 	"github.com/cosmos/evm/x/vm/types"
+	"github.com/cosmos/evm/x/vm/types/mocks"
 
 	"cosmossdk.io/math"
 	"cosmossdk.io/store/prefix"
 
+	storetypes "cosmossdk.io/store/types"
 	"github.com/cosmos/cosmos-sdk/client"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
+	"github.com/cosmos/cosmos-sdk/testutil"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	moduletestutil "github.com/cosmos/cosmos-sdk/types/module/testutil"
 	authsigning "github.com/cosmos/cosmos-sdk/x/auth/signing"
 	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
@@ -1060,6 +1069,181 @@ func (s *KeeperTestSuite) TestSetBalance() {
 	}
 }
 
+func (s *KeeperTestSuite) TestSetBalanceRejectsModuleAccounts() {
+	type setup struct {
+		addr    common.Address
+		current *uint256.Int
+	}
+
+	mockModuleSetup := func(name string, initialBalance int64) func() setup {
+		return func() setup {
+			ctx := s.Network.GetContext()
+			ak := s.Network.App.GetAccountKeeper()
+			acc := authtypes.NewEmptyModuleAccount(name, authtypes.Minter)
+			ak.NewAccount(ctx, acc)
+			ak.SetAccount(ctx, acc)
+			if initialBalance > 0 {
+				err := s.Network.App.GetBankKeeper().SendCoins(
+					ctx,
+					s.Keyring.GetAccAddr(0),
+					acc.GetAddress(),
+					sdk.NewCoins(sdk.NewCoin(s.Network.GetBaseDenom(), math.NewInt(initialBalance))),
+				)
+				s.Require().NoError(err)
+			}
+			modEth := common.BytesToAddress(acc.GetAddress().Bytes())
+			return setup{
+				addr:    modEth,
+				current: s.Network.App.GetEVMKeeper().GetBalance(ctx, modEth),
+			}
+		}
+	}
+
+	cases := []struct {
+		name     string
+		prepare  func() setup
+		amountFn func(current *uint256.Int) *uint256.Int
+	}{
+		{
+			name:     "mock module account, zero balance, write nonzero",
+			prepare:  mockModuleSetup("test-mod-zero", 0),
+			amountFn: func(_ *uint256.Int) *uint256.Int { return uint256.NewInt(12345) },
+		},
+		{
+			name:    "mock module account, decrease",
+			prepare: mockModuleSetup("test-mod-decrease", 1000),
+			amountFn: func(cur *uint256.Int) *uint256.Int {
+				if cur.IsZero() {
+					return uint256.NewInt(0)
+				}
+				return new(uint256.Int).Sub(cur, uint256.NewInt(1))
+			},
+		},
+		{
+			name:     "mock module account, equal",
+			prepare:  mockModuleSetup("test-mod-equal", 1000),
+			amountFn: func(cur *uint256.Int) *uint256.Int { return new(uint256.Int).Set(cur) },
+		},
+	}
+
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			s.SetupTest()
+			st := tc.prepare()
+			amount := tc.amountFn(st.current)
+
+			err := s.Network.App.GetEVMKeeper().SetBalance(s.Network.GetContext(), st.addr, amount)
+			s.Require().Error(err)
+			s.Require().Contains(err.Error(), "is not allowed to receive funds")
+
+			after := s.Network.App.GetEVMKeeper().GetBalance(s.Network.GetContext(), st.addr)
+			s.Require().Equal(st.current, after)
+		})
+	}
+}
+
+func (s *KeeperTestSuite) TestSetBalanceWithLocked() {
+	amount := common.U2560
+	var locked *big.Int
+	addr := utiltx.GenerateAddress()
+
+	testCases := []struct {
+		name           string
+		addr           common.Address
+		malleate       func()
+		expErr         bool
+		expTotalAmount func() *uint256.Int
+		expSpendable   func() *uint256.Int
+	}{
+		{
+			"non vesting account: locked overrides reread",
+			addr,
+			func() {
+				amount = uint256.NewInt(100)
+				locked = big.NewInt(50)
+			},
+			false,
+			func() *uint256.Int {
+				return uint256.NewInt(150)
+			},
+			func() *uint256.Int {
+				// All funds are spendable on a non base account, the snapshot
+				// only inflates the bank balance reconstruction.
+				return uint256.NewInt(150)
+			},
+		},
+		{
+			"vesting account: locked snapshot beats current LockedCoins re-read",
+			addr,
+			func() {
+				ctx := s.Network.GetContext()
+				accAddr := sdk.AccAddress(addr.Bytes())
+				err := s.Network.App.GetBankKeeper().SendCoins(ctx, s.Keyring.GetAccAddr(0), accAddr, sdk.NewCoins(sdk.NewCoin(s.Network.GetBaseDenom(), math.NewInt(100))))
+				s.Require().NoError(err)
+
+				baseAccount := s.Network.App.GetAccountKeeper().GetAccount(ctx, accAddr).(*authtypes.BaseAccount)
+				baseDenom := s.Network.GetBaseDenom()
+				currTime := s.Network.GetContext().BlockTime().Unix()
+
+				// setup vesting account with 40 locked to simulate a spend
+				acc, err := vestingtypes.NewContinuousVestingAccount(
+					baseAccount,
+					sdk.NewCoins(sdk.NewCoin(baseDenom, math.NewInt(40))),
+					currTime, currTime+100,
+				)
+				s.Require().NoError(err)
+				s.Network.App.GetAccountKeeper().SetAccount(ctx, acc)
+
+				amount = uint256.NewInt(100)
+
+				// override locked to 100
+				locked = big.NewInt(100)
+			},
+			false,
+			func() *uint256.Int {
+				// ensure we used the override of 100
+				return uint256.NewInt(200)
+			},
+			func() *uint256.Int {
+				// spendable = bank balance − current LockedCoins = 200 − 40 = 160.
+				return uint256.NewInt(160)
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		s.Run(tc.name, func() {
+			s.SetupTest()
+
+			tc.malleate()
+			err := s.Network.App.GetEVMKeeper().SetBalanceWithLocked(s.Network.GetContext(), tc.addr, amount, locked)
+			if tc.expErr {
+				s.Require().Error(err)
+				return
+			}
+
+			balance := s.Network.App.GetEVMKeeper().GetBalance(s.Network.GetContext(), tc.addr)
+			s.Require().NoError(err)
+			s.Require().Equal(tc.expTotalAmount(), balance)
+
+			spendable := s.Network.App.GetEVMKeeper().SpendableCoin(s.Network.GetContext(), tc.addr)
+			s.Require().Equal(tc.expSpendable(), spendable)
+		})
+	}
+}
+
+func (s *KeeperTestSuite) TestSetBalanceAllowsEOA() {
+	s.SetupTest()
+	addr := utiltx.GenerateAddress()
+	amount := uint256.NewInt(12345)
+
+	err := s.Network.App.GetEVMKeeper().SetBalance(s.Network.GetContext(), addr, amount)
+	s.Require().NoError(err)
+
+	got := s.Network.App.GetEVMKeeper().GetBalance(s.Network.GetContext(), addr)
+	s.Require().Equal(amount, got)
+}
+
 func (s *KeeperTestSuite) TestDeleteAccount() {
 	var (
 		ctx          sdk.Context
@@ -1147,6 +1331,93 @@ func (s *KeeperTestSuite) TestDeleteAccount() {
 
 				acc := s.Network.App.GetEVMKeeper().GetAccount(ctx, addr)
 				s.Require().NotNil(acc, "expected account to still be found after failing to delete")
+			}
+		})
+	}
+}
+
+func (s *KeeperTestSuite) TestSetBalanceBlockedNonModuleArm() {
+	configurator := types.NewEVMConfigurator()
+	configurator.ResetTestConfig()
+	s.Require().NoError(configurator.WithEVMCoinInfo(testconstants.ExampleChainCoinInfo[testconstants.ExampleChainID]).Configure())
+
+	extDenom := types.GetEVMCoinExtendedDenom()
+	addr := common.HexToAddress("0x000000000000000000000000000000000000c0de")
+	cosmosAddr := sdk.AccAddress(addr.Bytes())
+
+	cases := []struct {
+		name      string
+		current   math.Int
+		amount    *uint256.Int
+		blocked   bool
+		expReject bool
+	}{
+		{
+			name:      "blocked non-module, amount != current → reject via isBlockedChange",
+			current:   math.NewInt(100),
+			amount:    uint256.NewInt(50),
+			blocked:   true,
+			expReject: true,
+		},
+		{
+			name:      "blocked non-module, amount == current → allowed (equality skip)",
+			current:   math.NewInt(100),
+			amount:    uint256.NewInt(100),
+			blocked:   true,
+			expReject: false,
+		},
+		{
+			name:      "non-blocked non-module, amount != current → allowed",
+			current:   math.NewInt(100),
+			amount:    uint256.NewInt(200),
+			blocked:   false,
+			expReject: false,
+		},
+	}
+
+	for _, tc := range cases {
+		s.Run(tc.name, func() {
+			key := storetypes.NewKVStoreKey(types.StoreKey)
+			oKey := storetypes.NewObjectStoreKey(types.ObjectKey)
+			allKeys := []storetypes.StoreKey{key, oKey}
+			testCtx := testutil.DefaultContextWithObjectStore(s.T(), key,
+				storetypes.NewTransientStoreKey("store_test"), oKey)
+			ctx := testCtx.Ctx.WithBlockHeader(cmtproto.Header{Time: cmttime.Now()})
+			encCfg := moduletestutil.MakeTestEncodingConfig()
+
+			authority := sdk.AccAddress("foobar")
+			bankKeeper := mocks.NewBankKeeper(s.T())
+			accKeeper := mocks.NewAccountKeeper(s.T())
+			stakingKeeper := mocks.NewStakingKeeper(s.T())
+			fmKeeper := mocks.NewFeeMarketKeeper(s.T())
+			erc20Keeper := mocks.NewErc20Keeper(s.T())
+			consensusKeeper := mocks.NewConsensusParamsKeeper(s.T())
+
+			accKeeper.On("GetModuleAddress", types.ModuleName).Return(sdk.AccAddress("evm"))
+			vmKeeper := vmkeeper.NewKeeper(
+				encCfg.Codec, key, oKey, allKeys, authority,
+				accKeeper, bankKeeper, stakingKeeper, fmKeeper,
+				consensusKeeper, erc20Keeper,
+				testconstants.EighteenDecimalsChainID,
+				"",
+			)
+
+			baseAcc := authtypes.NewBaseAccountWithAddress(cosmosAddr)
+			accKeeper.On("GetAccount", mock.Anything, cosmosAddr).Return(baseAcc)
+			bankKeeper.On("SpendableCoin", mock.Anything, cosmosAddr, extDenom).
+				Return(sdk.Coin{Denom: extDenom, Amount: tc.current})
+			bankKeeper.On("BlockedAddr", cosmosAddr).Return(tc.blocked)
+			bankKeeper.On("LockedCoins", mock.Anything, cosmosAddr).Return(sdk.Coins{})
+			if !tc.expReject {
+				bankKeeper.On("UncheckedSetBalance", mock.Anything, cosmosAddr, mock.Anything).Return(nil)
+			}
+
+			err := vmKeeper.SetBalance(ctx, addr, tc.amount)
+			if tc.expReject {
+				s.Require().Error(err)
+				s.Require().Contains(err.Error(), "is not allowed to receive funds")
+			} else {
+				s.Require().NoError(err)
 			}
 		})
 	}
