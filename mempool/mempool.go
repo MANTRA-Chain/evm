@@ -421,6 +421,12 @@ func (m *ExperimentalEVMMempool) SetEventBus(eventBus *cmttypes.EventBus) {
 	refreshes := 0
 
 	go func() {
+		// Nothing re-subscribes if this exits, but EndBlock also drives
+		// NotifyNewBlock every block, so the caches keep advancing. Info
+		// level: this also fires on a clean Close or re-subscribe.
+		defer func() {
+			m.logger.Info("block header subscription ended", "reason", sub.Err())
+		}()
 		for range sub.Out() {
 			if freezeAfter >= 0 && refreshes >= freezeAfter {
 				continue // frozen: caches stay pinned to an old version
