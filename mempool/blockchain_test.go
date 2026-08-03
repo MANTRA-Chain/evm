@@ -180,19 +180,19 @@ func TestNotifyNewBlockRefreshesContextEveryCall(t *testing.T) {
 		return string(ctx.BlockHeader().AppHash)
 	}
 
-	require.True(t, blockchain.NotifyNewBlock(), "a new height should notify")
+	require.NotNil(t, blockchain.NotifyNewBlock(), "a new height should notify")
 	require.Len(t, events, 1)
 	require.Equal(t, "first", appHash())
 
 	// Same height, different context: no second event, but the pin still has
 	// to move -- this is the property the fix turns on.
 	set(1, "second")
-	require.False(t, blockchain.NotifyNewBlock(), "a repeated height must not notify")
+	require.Nil(t, blockchain.NotifyNewBlock(), "a repeated height must not notify")
 	require.Len(t, events, 1)
 	require.Equal(t, "second", appHash(), "the pin must refresh even when the event is skipped")
 
 	set(2, "third")
-	require.True(t, blockchain.NotifyNewBlock(), "a later height should notify again")
+	require.NotNil(t, blockchain.NotifyNewBlock(), "a later height should notify again")
 	require.Len(t, events, 2)
 	require.Equal(t, "third", appHash())
 }
@@ -213,7 +213,7 @@ func TestNotifyNewBlockDedupsConcurrentDrivers(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if blockchain.NotifyNewBlock() {
+			if blockchain.NotifyNewBlock() != nil {
 				notified.Add(1)
 			}
 		}()
@@ -238,7 +238,7 @@ func TestNotifyNewBlockRecoversFromContextError(t *testing.T) {
 		return notifyTestContext(1, "healed"), nil
 	})
 
-	require.False(t, blockchain.NotifyNewBlock(), "a failed refresh should not announce a head")
+	require.Nil(t, blockchain.NotifyNewBlock(), "a failed refresh should not announce a head")
 
 	mu.Lock()
 	failing = false
@@ -247,4 +247,30 @@ func TestNotifyNewBlockRecoversFromContextError(t *testing.T) {
 	ctx, err := blockchain.GetLatestContext()
 	require.NoError(t, err)
 	require.Equal(t, "healed", string(ctx.BlockHeader().AppHash))
+}
+
+func TestNotifyNewBlockSkipsOnHeightHint(t *testing.T) {
+	var built, height atomic.Int64
+	height.Store(1)
+	blockchain := newNotifyTestBlockchain(t, func(int64, bool) (sdk.Context, error) {
+		built.Add(1)
+		return notifyTestContext(height.Load(), "head"), nil
+	})
+
+	require.NotNil(t, blockchain.NotifyNewBlockAt(1))
+	afterFirst := built.Load()
+
+	// A driver naming a height already notified must not build a context.
+	require.Nil(t, blockchain.NotifyNewBlockAt(1))
+	require.Equal(t, afterFirst, built.Load(), "the hint should short-circuit before newLatestContext")
+
+	// The backstop still works when the other driver has stopped: an unnotified
+	// height falls through and refreshes.
+	height.Store(2)
+	require.NotNil(t, blockchain.NotifyNewBlockAt(2))
+	require.Greater(t, built.Load(), afterFirst)
+
+	// A caller that cannot name its height is never skipped early.
+	height.Store(3)
+	require.NotNil(t, blockchain.NotifyNewBlock())
 }

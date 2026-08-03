@@ -50,7 +50,8 @@ func (k *Keeper) EndBlock(ctx sdk.Context) error {
 		// version once pruning passes it. NotifyNewBlock emits at most one
 		// chain head event per height, so on a healthy node this call only
 		// refreshes the latest context.
-		k.evmMempool.GetBlockchain().NotifyNewBlock()
+		// EndBlock of N runs before N commits, so the latest committed is N-1.
+		k.evmMempool.GetBlockchain().NotifyNewBlockAt(ctx.BlockHeight() - 1)
 	}
 
 	bloom := ethtypes.BytesToBloom(k.GetBlockBloomTransient(infCtx).Bytes())

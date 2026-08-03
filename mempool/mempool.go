@@ -411,8 +411,11 @@ func (m *ExperimentalEVMMempool) SetEventBus(eventBus *cmttypes.EventBus) {
 		defer func() {
 			m.logger.Info("block header subscription ended", "reason", sub.Err())
 		}()
-		for range sub.Out() {
-			m.GetBlockchain().NotifyNewBlock()
+		for msg := range sub.Out() {
+			// The event names the block that just committed; a failed
+			// assertion leaves the zero height, which never skips.
+			ev, _ := msg.Data().(cmttypes.EventDataNewBlockHeader)
+			m.GetBlockchain().NotifyNewBlockAt(ev.Header.Height)
 		}
 	}()
 }
