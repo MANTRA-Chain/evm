@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math"
@@ -38,6 +39,8 @@ import (
 	consensustypes "github.com/cosmos/cosmos-sdk/x/consensus/types"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 )
+
+const TestPostProcessingEventType = "test_post_processing_event"
 
 func (s *KeeperTestSuite) TestContextSetConsensusParams() {
 	// set new value of max gas in consensus params
@@ -654,6 +657,7 @@ func (s *KeeperTestSuite) TestApplyTransactionWithTxPostProcessing() {
 					keeper.NewMultiEvmHooks(
 						&testHooks{
 							postProcessing: func(ctx sdk.Context, sender common.Address, msg core.Message, receipt *gethtypes.Receipt) error {
+								ctx.EventManager().EmitEvent(sdk.NewEvent(TestPostProcessingEventType))
 								return nil
 							},
 						},
@@ -685,7 +689,17 @@ func (s *KeeperTestSuite) TestApplyTransactionWithTxPostProcessing() {
 				s.Require().Equal(senderBefore.Sub(sdkmath.NewIntFromBigInt(transferAmt)), senderAfter)
 				s.Require().Equal(recipientBefore.Add(sdkmath.NewIntFromBigInt(transferAmt)), recipientAfter)
 			},
-			func(s *KeeperTestSuite) {},
+			func(s *KeeperTestSuite) {
+				// check if the event emitted exactly once
+				events := s.Network.GetContext().EventManager().Events()
+				var postProcessingEvents []sdk.Event
+				for _, event := range events {
+					if event.Type == TestPostProcessingEventType {
+						postProcessingEvents = append(postProcessingEvents, event)
+					}
+				}
+				s.Require().Len(postProcessingEvents, 1)
+			},
 		},
 		{
 			"pass - evm tx succeeds, post processing is called but fails, the balance is unchanged",
@@ -865,6 +879,32 @@ func (s *KeeperTestSuite) TestApplyMessage() {
 	}
 }
 
+// TestApplyMessageInternalFloor verifies EIP-7623 floor is charged on internal calls.
+func (s *KeeperTestSuite) TestApplyMessageInternalFloor() {
+	s.EnableFeemarket = true
+	defer func() { s.EnableFeemarket = false }()
+	s.SetupTest()
+
+	sender := s.Keyring.GetKey(0)
+	recipient := s.Keyring.GetAddr(1)
+	calldata := bytes.Repeat([]byte{0x01}, 2048)
+	coreMsg, err := s.Factory.GenerateGethCoreMsg(sender.Priv, types.EvmTxArgs{
+		To:       &recipient,
+		Amount:   big.NewInt(100),
+		Input:    calldata,
+		GasLimit: 110_000,
+	})
+	s.Require().NoError(err)
+
+	stateDB := statedb.New(s.Network.GetContext(), s.Network.App.GetEVMKeeper(), statedb.NewEmptyTxConfig())
+	// internal=true: the path used by x/vm/keeper.CallEVM.
+	res, err := s.Network.App.GetEVMKeeper().ApplyMessage(s.Network.GetContext(), stateDB, *coreMsg, nil, true, false, true)
+	s.Require().NoError(err)
+	s.Require().False(res.Failed())
+	floorDataGas := params.TxGas + params.TxCostFloorPerToken*params.TxTokenPerNonZeroByte*uint64(len(calldata))
+	s.Require().Equal(floorDataGas, res.GasUsed)
+}
+
 func (s *KeeperTestSuite) TestApplyMessageWithConfig() {
 	s.EnableFeemarket = true
 	defer func() { s.EnableFeemarket = false }()
@@ -880,6 +920,8 @@ func (s *KeeperTestSuite) TestApplyMessageWithConfig() {
 			Nonce:   &nonce,
 		},
 	}
+
+	calldata := bytes.Repeat([]byte{0x01}, 2048)
 
 	testCases := []struct {
 		name               string
@@ -1053,6 +1095,30 @@ func (s *KeeperTestSuite) TestApplyMessageWithConfig() {
 			expErr:             false,
 			expVMErr:           false,
 			expectedGasUsed:    params.TxGas,
+		},
+		{
+			// EIP-7623: calldata floor clamps gasUsed when it exceeds intrinsic
+			// and the Cosmos minGasMultiplier floor.
+			name: "success - EIP-7623 floor data gas binds gas used",
+			getMessage: func() core.Message {
+				sender := s.Keyring.GetKey(0)
+				recipient := s.Keyring.GetAddr(1)
+				msg, err := s.Factory.GenerateGethCoreMsg(sender.Priv, types.EvmTxArgs{
+					To:       &recipient,
+					Amount:   big.NewInt(100),
+					Input:    calldata,
+					GasLimit: 110_000,
+				})
+				s.Require().NoError(err)
+				return *msg
+			},
+			getEVMParams:       types.DefaultParams,
+			getFeeMarketParams: feemarkettypes.DefaultParams,
+			overrides:          nil,
+			expErr:             false,
+			expVMErr:           false,
+			expectedGasUsed:    params.TxGas + params.TxCostFloorPerToken*params.TxTokenPerNonZeroByte*uint64(len(calldata)),
+			postCheck:          nil,
 		},
 		{
 			name: "call contract tx with config param EnableCall = false",
