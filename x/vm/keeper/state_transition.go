@@ -260,8 +260,6 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, tx *ethtypes.Transaction) (*t
 		return nil, errorsmod.Wrap(err, "failed to extract sender address from ethereum transaction")
 	}
 
-	eventsLen := len(tmpCtx.EventManager().Events())
-
 	// Only call PostTxProcessing if there are hooks set, to avoid calling commitFn unnecessarily
 	if !k.HasHooks() {
 		// If there are no hooks, we can commit the state immediately if the tx is successful
@@ -294,11 +292,6 @@ func (k *Keeper) ApplyTransaction(ctx sdk.Context, tx *ethtypes.Transaction) (*t
 				receipt.Bloom = ethtypes.Bloom{}
 			} else {
 				res.Logs = types.NewLogsFromEth(receipt.Logs)
-			}
-
-			events := tmpCtx.EventManager().Events()
-			if len(events) > eventsLen {
-				ctx.EventManager().EmitEvents(events[eventsLen:])
 			}
 		}
 	}
@@ -399,6 +392,13 @@ func (k *Keeper) ApplyMessageWithConfig(ctx sdk.Context, stateDB *statedb.StateD
 	rules := ethCfg.Rules(evm.Context.BlockNumber, true, evm.Context.Time)
 	if overrides != nil {
 		precompiles := vm.ActivePrecompiledContracts(rules)
+		params := k.GetParams(ctx)
+		for _, precompileAddr := range params.ActiveStaticPrecompiles {
+			address := common.HexToAddress(precompileAddr)
+			if precompile, found := k.precompiles[address]; found {
+				precompiles[address] = precompile
+			}
+		}
 		if err := overrides.Apply(stateDB, precompiles); err != nil {
 			return nil, errorsmod.Wrap(err, "failed to apply state override")
 		}
@@ -437,8 +437,9 @@ func (k *Keeper) ApplyMessageWithConfig(ctx sdk.Context, stateDB *statedb.StateD
 		// eth_estimateGas will check for this exact error
 		return nil, errorsmod.Wrap(core.ErrIntrinsicGas, "apply message")
 	}
+	var floorDataGas uint64
 	if rules.IsPrague {
-		floorDataGas, err := core.FloorDataGas(msg.Data)
+		floorDataGas, err = core.FloorDataGas(msg.Data)
 		if err != nil {
 			return nil, err
 		}
@@ -554,6 +555,10 @@ func (k *Keeper) ApplyMessageWithConfig(ctx sdk.Context, stateDB *statedb.StateD
 	gasUsed := math.LegacyNewDec(int64(temporaryGasUsed)) //#nosec G115 -- int overflow is not a concern here
 	if !internal {
 		gasUsed = math.LegacyMaxDec(gasUsed, minimumGasUsed)
+	}
+	// EIP-7623: charged gas must be at least the calldata floor after refunds.
+	if rules.IsPrague {
+		gasUsed = math.LegacyMaxDec(gasUsed, math.LegacyNewDec(int64(floorDataGas))) //#nosec G115
 	}
 	// reset leftoverGas, to be used by the tracer
 	leftoverGas = msg.GasLimit - gasUsed.TruncateInt().Uint64()
