@@ -43,8 +43,15 @@ func (k *Keeper) EndBlock(ctx sdk.Context) error {
 	// Gas costs are handled within msg handler so costs should be ignored
 	infCtx := ctx.WithGasMeter(storetypes.NewInfiniteGasMeter())
 
-	if k.evmMempool != nil && !k.evmMempool.HasEventBus() {
-		k.evmMempool.GetBlockchain().NotifyNewBlock()
+	if k.evmMempool != nil {
+		// Notify every block, even with an event bus: its goroutine exits
+		// silently if CometBFT drops the subscription, and both the pinned
+		// query context and the tx pool's statedb then outlive their IAVL
+		// version once pruning passes it. NotifyNewBlock emits at most one
+		// chain head event per height, so on a healthy node this call only
+		// refreshes the latest context.
+		// EndBlock of N runs before N commits, so the latest committed is N-1.
+		k.evmMempool.GetBlockchain().NotifyNewBlockAt(ctx.BlockHeight() - 1)
 	}
 
 	bloom := ethtypes.BytesToBloom(k.GetBlockBloomTransient(infCtx).Bytes())

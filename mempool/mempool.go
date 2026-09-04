@@ -405,8 +405,17 @@ func (m *ExperimentalEVMMempool) SetEventBus(eventBus *cmttypes.EventBus) {
 		panic(err)
 	}
 	go func() {
-		for range sub.Out() {
-			m.GetBlockchain().NotifyNewBlock()
+		// Nothing re-subscribes if this exits, but EndBlock also drives
+		// NotifyNewBlock every block, so the caches keep advancing. Info
+		// level: this also fires on a clean Close or re-subscribe.
+		defer func() {
+			m.logger.Info("block header subscription ended", "reason", sub.Err())
+		}()
+		for msg := range sub.Out() {
+			// The event names the block that just committed; a failed
+			// assertion leaves the zero height, which never skips.
+			ev, _ := msg.Data().(cmttypes.EventDataNewBlockHeader)
+			m.GetBlockchain().NotifyNewBlockAt(ev.Header.Height)
 		}
 	}()
 }
