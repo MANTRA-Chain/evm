@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"strconv"
 	"sync"
 
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
@@ -363,10 +361,6 @@ func (m *ExperimentalEVMMempool) shouldRemoveFromEVMPool(tx sdk.Tx) bool {
 		return false // Cannot validate, keep transaction
 	}
 
-	// ctx pins one IAVL version and nothing registers it as a version reader,
-	// so pruning can delete its nodes. Log the height to spot a stale pin.
-	m.logger.Error("validating against pinned context", "ctx_height", ctx.BlockHeight())
-
 	_, err = m.anteHandler(ctx, tx, true)
 	// Keep nonce gap transactions, remove others that fail validation
 	if errors.Is(err, ErrNonceGap) || errors.Is(err, sdkerrors.ErrInvalidSequence) || errors.Is(err, sdkerrors.ErrOutOfGas) {
@@ -410,16 +404,6 @@ func (m *ExperimentalEVMMempool) SetEventBus(eventBus *cmttypes.EventBus) {
 	if err != nil {
 		panic(err)
 	}
-	// Stop refreshing after N notifications, modelling the subscription drop
-	// that happens by itself in production. Unset in normal operation.
-	freezeAfter := -1
-	if v := os.Getenv("EVM_MEMPOOL_FREEZE_CTX_AFTER"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			freezeAfter = n
-		}
-	}
-	refreshes := 0
-
 	go func() {
 		// Nothing re-subscribes if this exits, but EndBlock also drives
 		// NotifyNewBlock every block, so the caches keep advancing. Info
@@ -428,10 +412,6 @@ func (m *ExperimentalEVMMempool) SetEventBus(eventBus *cmttypes.EventBus) {
 			m.logger.Info("block header subscription ended", "reason", sub.Err())
 		}()
 		for range sub.Out() {
-			if freezeAfter >= 0 && refreshes >= freezeAfter {
-				continue // frozen: caches stay pinned to an old version
-			}
-			refreshes++
 			m.GetBlockchain().NotifyNewBlock()
 		}
 	}()
